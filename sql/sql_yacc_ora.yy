@@ -341,6 +341,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, ulong *yystacksize);
 %token  BIT_XOR                       /* MYSQL-FUNC */
 %token  BLOB_SYM                      /* SQL-2003-R */
 %token  BLOCK_SYM
+%token  BODY_SYM                      /* Oracle-R   */
 %token  BOOLEAN_SYM                   /* SQL-2003-R */
 %token  BOOL_SYM
 %token  BOTH                          /* SQL-2003-R */
@@ -723,6 +724,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, ulong *yystacksize);
 %token  OUT_SYM                       /* SQL-2003-R */
 %token  OVER_SYM
 %token  OWNER_SYM
+%token  PACKAGE_SYM                   /* Oracle-R */
 %token  PACK_KEYS_SYM
 %token  PAGE_SYM
 %token  PAGE_CHECKSUM_SYM
@@ -1028,6 +1030,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, ulong *yystacksize);
         ident_directly_assignable
         sp_decl_ident
         sp_block_label opt_place opt_db
+        opt_package_name
 
 %type <lex_string_with_metadata>
         TEXT_STRING
@@ -1330,8 +1333,8 @@ bool my_yyoverflow(short **a, YYSTYPE **b, ulong *yystacksize);
         opt_serial_attribute opt_serial_attribute_list serial_attribute
         explainable_command
         set_assign
-        sf_tail_standalone
-        sp_tail_standalone
+        sf_tail_standalone sf_tail_package
+        sp_tail_standalone sp_tail_package
 END_OF_INPUT
 
 %type <NONE> call sp_proc_stmts sp_proc_stmts1 sp_proc_stmt
@@ -1362,6 +1365,7 @@ END_OF_INPUT
 %type <sp_instr_addr> sp_instr_addr
 %type <sp_cursor_name_and_offset> sp_cursor_name_and_offset
 %type <num> opt_exception_clause exception_handlers
+%type <lex> remember_lex package_routine_lex
 %type <spname> sp_name opt_sp_name
 %type <spvar> sp_param_name sp_param_name_and_type
 %type <for_loop> sp_for_loop_index_and_bounds
@@ -2090,6 +2094,134 @@ create:
         | create_or_replace { Lex->set_command(SQLCOM_CREATE_SERVER, $1); }
           server_def
           { }
+        | CREATE PACKAGE_SYM opt_if_not_exists ident sp_tail_is
+          {
+            LEX *lex= Lex;
+            lex->name= $4;
+            lex->create_info.default_table_charset= NULL;
+            lex->create_info.used_fields= 0;
+            if (lex->set_command_with_check(SQLCOM_CREATE_PACKAGE, 0, $3))
+               MYSQL_YYABORT;
+            if (!(lex->package_body= new (thd->mem_root) Package_body(lex)))
+              MYSQL_YYABORT;
+          }
+          opt_package_declaration_element_list END opt_package_name
+          {
+            if ($9.str && strcmp($9.str, $4.str))
+              my_yyabort_error((ER_END_IDENTIFIER_DOES_NOT_MATCH, MYF(0),
+                                $9.str, $4.str));
+          }
+        | CREATE PACKAGE_SYM BODY_SYM ident sp_tail_is
+          {
+            LEX *lex= Lex;
+            lex->name= $4;
+            lex->sql_command= SQLCOM_CREATE_PACKAGE_BODY;
+            lex->definer= NULL;
+            if (!(lex->package_body= new (thd->mem_root) Package_body(lex)))
+              MYSQL_YYABORT;
+          }
+          package_implementation_element_list END opt_package_name
+          {
+            if ($9.str && strcmp($9.str, $4.str))
+              my_yyabort_error((ER_END_IDENTIFIER_DOES_NOT_MATCH, MYF(0),
+                                $9.str, $4.str));
+          }
+        ;
+
+package_implementation_element_list:
+          package_implementation_element
+        | package_implementation_element_list package_implementation_element
+        ;
+
+
+package_routine_lex:
+          {
+            if (!($$= new (thd->mem_root) sp_lex_local(thd, thd->lex)))
+              MYSQL_YYABORT;
+            thd->m_parser_state->m_yacc.reset_before_substatement();
+          }
+        ;
+
+package_implementation_element:
+          remember_lex package_routine_lex
+          {
+            thd->lex= $2;
+            if (($1)->package_body->m_lex_list.push_back($2, thd->mem_root))
+              MYSQL_YYABORT;
+          }
+          package_implementation_element_routine
+          {
+            thd->lex= $1;
+          }
+        ;
+
+package_implementation_element_routine:
+          FUNCTION_SYM sf_tail_package ';'
+        | PROCEDURE_SYM sp_tail_package ';'
+        ;
+
+
+opt_package_declaration_element_list:
+          /* Empty */
+        | package_declaration_element_list
+        ;
+
+package_declaration_element_list:
+          package_declaration_element
+        | package_declaration_element_list package_declaration_element
+        ;
+
+package_declaration_element:
+          FUNCTION_SYM package_declaration_function ';'
+        | PROCEDURE_SYM package_declaration_procedure ';'
+        ;
+
+package_declaration_function:
+          remember_lex package_routine_lex sp_name
+          {
+            thd->lex= $2;
+            if (($1)->package_body->m_lex_list.push_back($2, thd->mem_root))
+              MYSQL_YYABORT;
+            if (!Lex->make_sp_head_no_recursive(thd, DDL_options(), $3,
+                                                TYPE_ENUM_FUNCTION))
+              MYSQL_YYABORT;
+            Lex->spname= $3;
+            (void) is_native_function_with_warn(thd, &$3->m_name);
+            Lex->sql_command= SQLCOM_CREATE_FUNCTION;
+          }
+          opt_sp_parenthesized_fdparam_list
+          sf_return_type
+          sp_c_chistics
+          {
+            sp_head *sp= thd->lex->sphead;
+            sp->set_body_start(thd, YYLIP->get_cpp_tok_start());
+            sp->set_stmt_end(thd);
+            sp->restore_thd_mem_root(thd);
+            thd->lex= $1;
+          }
+        ;
+
+package_declaration_procedure:
+          remember_lex package_routine_lex sp_name
+          {
+            thd->lex= $2;
+            if (($1)->package_body->m_lex_list.push_back($2, thd->mem_root))
+              MYSQL_YYABORT;
+            if (!Lex->make_sp_head_no_recursive(thd, DDL_options(), $3,
+                                                TYPE_ENUM_PROCEDURE))
+              MYSQL_YYABORT;
+            Lex->spname= $3;
+            Lex->sql_command= SQLCOM_CREATE_PROCEDURE;
+          }
+          opt_sp_parenthesized_pdparam_list
+          sp_c_chistics
+          {
+            sp_head *sp= thd->lex->sphead;
+            sp->set_body_start(thd, YYLIP->get_cpp_tok_start());
+            sp->set_stmt_end(thd);
+            sp->restore_thd_mem_root(thd);
+            thd->lex= $1;
+          }
         ;
 
 create_function_tail:
@@ -3568,6 +3700,12 @@ sp_proc_stmt_goto:
           }
         ;
 
+
+remember_lex:
+          {
+            $$= thd->lex;
+          }
+        ;
 
 assignment_source_lex:
           {
@@ -7125,6 +7263,11 @@ key_part:
             if ($$ == NULL)
               MYSQL_YYABORT;
           }
+        ;
+
+opt_package_name:
+          /* empty */ { $$= null_clex_str; }
+        | ident       { $$= $1; }
         ;
 
 opt_ident:
@@ -12347,6 +12490,18 @@ drop:
             lex->set_command(SQLCOM_DROP_DB, $3);
             lex->name= $4;
           }
+        | DROP PACKAGE_SYM opt_if_exists ident
+          {
+            LEX *lex= Lex;
+            lex->name= $4;
+            lex->set_command(SQLCOM_DROP_PACKAGE, $3);
+          }
+        | DROP PACKAGE_SYM BODY_SYM ident
+          {
+            LEX *lex= Lex;
+            lex->name= $4;
+            lex->sql_command= SQLCOM_DROP_PACKAGE_BODY;
+          }
         | DROP FUNCTION_SYM opt_if_exists ident '.' ident
           {
             LEX *lex= thd->lex;
@@ -16966,6 +17121,26 @@ sp_tail_standalone:
               my_yyabort_error((ER_END_IDENTIFIER_DOES_NOT_MATCH, MYF(0),
                                 ErrConvDQName($2).ptr(),
                                 ErrConvDQName(Lex->sphead).ptr()));
+          }
+        ;
+
+sf_tail_package:
+          sf_tail
+        | sf_tail ident
+          {
+            if (strcmp($2.str, Lex->sphead->m_name.str))
+              my_yyabort_error((ER_END_IDENTIFIER_DOES_NOT_MATCH, MYF(0),
+                                $2.str, Lex->sphead->m_name.str));
+          }
+        ;
+
+sp_tail_package:
+          sp_tail
+        | sp_tail ident
+          {
+            if (strcmp($2.str, Lex->sphead->m_name.str))
+              my_yyabort_error((ER_END_IDENTIFIER_DOES_NOT_MATCH, MYF(0),
+                                $2.str, Lex->sphead->m_name.str));
           }
         ;
 
