@@ -3156,16 +3156,6 @@ static int mysql_create_package_body_routines(THD *thd,
 }
 
 
-static bool mysql_drop_package_body_internal(THD *thd, const sp_name *spname)
-{
-  char db_tmp[SAFE_NAME_LEN];
-  const char *dbnorm= normalize_db_name(spname->m_db.str, db_tmp, sizeof(db_tmp));
-  char pattern[128];
-  my_snprintf(pattern, sizeof(pattern), "%s.", spname->m_name.str);
-  return sp_drop_db_routines(thd, dbnorm, pattern);
-}
-
-
 static int mysql_create_package(THD *thd, LEX *lex, stored_procedure_type type)
 {
   bool rc, already_exists;
@@ -3203,12 +3193,6 @@ static bool mysql_drop_package(THD *thd, stored_procedure_type type)
   sp_name spname(&tmpdb, &thd->lex->name, false);
   WSREP_TO_ISOLATION_BEGIN(WSREP_MYSQL_DB, NULL, NULL)
   res= sp_drop_routine(thd, type, &spname);
-  close_thread_tables(thd);
-  if (res == SP_OK)
-  {
-    // TODO: check error code
-    mysql_drop_package_body_internal(thd, &spname);
-  }
   return mysql_drop_routine_finalize(thd, &spname,
                                      type == TYPE_ENUM_PACKAGE ?
                                      "PACKAGE" : "PACKAGE BODY",

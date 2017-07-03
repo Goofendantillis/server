@@ -2094,10 +2094,11 @@ create:
         | create_or_replace { Lex->set_command(SQLCOM_CREATE_SERVER, $1); }
           server_def
           { }
-        | CREATE PACKAGE_SYM opt_if_not_exists ident sp_tail_is
+        | create_or_replace PACKAGE_SYM opt_if_not_exists ident sp_tail_is
           remember_name
           {
-            if (Lex->create_package_start(thd, SQLCOM_CREATE_PACKAGE, $4, $3))
+            if (Lex->create_package_start(thd, SQLCOM_CREATE_PACKAGE,
+                                          $4, $1 | $3))
               MYSQL_YYABORT;
           }
           opt_package_declaration_element_list END opt_package_name
@@ -2106,11 +2107,11 @@ create:
             if (Lex->create_package_finalize(thd, $4, $10, $6, $11))
               MYSQL_YYABORT;
           }
-        | CREATE PACKAGE_SYM BODY_SYM opt_if_not_exists ident sp_tail_is
+        | create_or_replace PACKAGE_SYM BODY_SYM opt_if_not_exists ident sp_tail_is
           remember_name
           {
             if (Lex->create_package_start(thd, SQLCOM_CREATE_PACKAGE_BODY,
-                                          $5, $4))
+                                          $5, $1 | $4))
               MYSQL_YYABORT;
           }
           package_implementation_element_list END opt_package_name

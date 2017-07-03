@@ -24,6 +24,27 @@ DROP PACKAGE BODY test2;
 
 
 --echo #
+--echo # Bad combinations of OR REPLACE and IF EXISTS
+--echo #
+
+DELIMITER $$;
+--error ER_WRONG_USAGE
+CREATE OR REPLACE PACKAGE IF NOT EXISTS pkg AS
+  PROCEDURE p1;
+END;
+$$
+DELIMITER ;$$
+
+DELIMITER $$;
+--error ER_WRONG_USAGE
+CREATE OR REPLACE PACKAGE BODY IF NOT EXISTS pkg AS
+  PROCEDURE p1 AS BEGIN NULL; END;
+END;
+$$
+DELIMITER ;$$
+
+
+--echo #
 --echo # PACKAGE and PS
 --echo #
 
@@ -267,6 +288,62 @@ DROP PACKAGE BODY test2;
 
 
 DROP PACKAGE test2;
+
+--echo #
+--echo # Testing OR REPLACE
+--echo #
+
+DELIMITER $$;
+CREATE OR REPLACE PACKAGE pkg AS
+  FUNCTION f0 RETURN INT;
+END;
+$$
+CREATE OR REPLACE PACKAGE pkg AS
+  FUNCTION f1 RETURN INT;
+END;
+$$
+DELIMITER ;$$
+SELECT name, type, `body` FROM mysql.proc WHERE name LIKE 'pkg%' ORDER BY type;
+
+DELIMITER $$;
+CREATE OR REPLACE PACKAGE BODY pkg AS
+  FUNCTION f1 RETURN INT AS BEGIN RETURN 10; END;
+END;
+$$
+DELIMITER ;$$
+SELECT name, type, `body` FROM mysql.proc WHERE name LIKE 'pkg%' ORDER BY type;
+SELECT pkg.f1();
+
+DELIMITER $$;
+CREATE OR REPLACE PACKAGE BODY pkg AS
+  FUNCTION f1 RETURN INT AS BEGIN RETURN 20; END;
+END;
+$$
+DELIMITER ;$$
+SELECT name, type, `body` FROM mysql.proc WHERE name LIKE 'pkg%' ORDER BY type;
+SELECT pkg.f1();
+
+DELIMITER $$;
+CREATE OR REPLACE PACKAGE pkg AS
+  FUNCTION f1 RETURN BIGINT;
+END;
+$$
+DELIMITER ;$$
+SELECT name, type, `body` FROM mysql.proc WHERE name LIKE 'pkg%' ORDER BY type;
+--error ER_SP_DOES_NOT_EXIST
+SELECT pkg.f1();
+
+DELIMITER $$;
+CREATE OR REPLACE PACKAGE BODY pkg AS
+  FUNCTION f1 RETURN INT AS BEGIN RETURN 30; END;
+END;
+$$
+DELIMITER ;$$
+SELECT name, type, `body` FROM mysql.proc WHERE name LIKE 'pkg%' ORDER BY type;
+SELECT pkg.f1();
+
+DROP PACKAGE pkg;
+
 
 --echo #
 --echo # Package routines accessing tables

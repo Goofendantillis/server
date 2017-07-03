@@ -47,6 +47,21 @@ db_load_routine(THD *thd, stored_procedure_type type, const sp_name *name,
                 longlong created, longlong modified,
                 Stored_program_creation_ctx *creation_ctx);
 
+static int
+sp_drop_db_routines_internal(THD *thd, TABLE *table,
+                             const char *db, const char *prefix);
+
+static bool
+sp_drop_package_routines(THD *thd, TABLE *table, const sp_name *spname)
+{
+  char db_tmp[SAFE_NAME_LEN];
+  const char *dbnorm= normalize_db_name(spname->m_db.str, db_tmp, sizeof(db_tmp));
+  char pattern[128];
+  my_snprintf(pattern, sizeof(pattern), "%s.", spname->m_name.str);
+  return sp_drop_db_routines_internal(thd, table, dbnorm, pattern);
+}
+
+
 static const
 TABLE_FIELD_TYPE proc_table_fields[MYSQL_PROC_FIELD_COUNT] =
 {
@@ -997,6 +1012,44 @@ sp_drop_routine_internal(THD *thd, stored_procedure_type type,
 }
 
 
+static int
+sp_find_and_drop_routine(THD *thd, TABLE *table,
+                         stored_procedure_type type,
+                         const sp_name *name)
+{
+  int ret;
+  if (SP_OK != (ret= db_find_routine_aux(thd, type, name, table)))
+    return ret;
+  return sp_drop_routine_internal(thd, type, name, table);
+}
+
+
+static int
+sp_find_and_drop_package_body(THD *thd, TABLE *table, const sp_name *name)
+{
+  int ret;
+  if (SP_OK != (ret= db_find_routine_aux(thd, TYPE_ENUM_PACKAGE_BODY,
+                                         name, table)))
+    return ret;
+  // TODO: check return value:
+  (void) sp_drop_package_routines(thd, table, name);
+  return sp_find_and_drop_routine(thd, table, TYPE_ENUM_PACKAGE_BODY, name);
+}
+
+
+static int
+sp_find_and_drop_package(THD *thd, TABLE *table, const sp_name *name)
+{
+  int ret;
+  if (SP_OK != (ret= db_find_routine_aux(thd, TYPE_ENUM_PACKAGE, name, table)))
+    return ret;
+  // TODO: check return value:
+  (void) sp_find_and_drop_package_body(thd, table, name);
+  return sp_find_and_drop_routine(thd, table, TYPE_ENUM_PACKAGE, name);
+}
+
+
+
 /**
   Write stored-routine object into mysql.proc.
 
@@ -1421,8 +1474,23 @@ sp_create_package(THD *thd,
       *already_exists= true;
       if (ddl_options.or_replace())
       {
-        if ((ret= sp_drop_routine_internal(thd, type, spname, table)))
+        switch (type) {
+        case TYPE_ENUM_PACKAGE:
+          ret= sp_find_and_drop_package(thd, table, spname);
+          break;
+        case TYPE_ENUM_PACKAGE_BODY:
+          ret= sp_find_and_drop_package_body(thd, table, spname);
+          break;
+        case TYPE_ENUM_FUNCTION:
+        case TYPE_ENUM_PROCEDURE:
+        case TYPE_ENUM_TRIGGER:
+        case TYPE_ENUM_PROXY:
+          DBUG_ASSERT(0);
+          ret= SP_OK;
+        }
+        if (ret)
           goto done;
+        *already_exists= false;
       }
       else if (ddl_options.if_not_exists())
       {
@@ -1661,21 +1729,21 @@ sp_drop_routine(THD *thd, stored_procedure_type type, const sp_name *name)
   if (!(table= open_proc_table_for_update(thd)))
     DBUG_RETURN(SP_OPEN_TABLE_FAILED);
 
-  if (type == TYPE_ENUM_PACKAGE)
-  {
-    /*
-      If we're dropping a PACKAGE,
-      we should also delete its PACKAGE BODY record.
-      TODO: check error code
-    */
-    if ((ret= db_find_routine_aux(thd, TYPE_ENUM_PACKAGE_BODY,
-                                  name, table)) == SP_OK)
-      ret= sp_drop_routine_internal(thd, TYPE_ENUM_PACKAGE_BODY,
-                                    name, table);
+  switch (type) {
+  case TYPE_ENUM_PACKAGE:
+    ret= sp_find_and_drop_package(thd, table, name);
+    break;
+  case TYPE_ENUM_PACKAGE_BODY:
+    ret= sp_find_and_drop_package_body(thd, table, name);
+    break;
+  case TYPE_ENUM_TRIGGER:
+  case TYPE_ENUM_PROXY:
+    DBUG_ASSERT(0);
+  case TYPE_ENUM_FUNCTION:
+  case TYPE_ENUM_PROCEDURE:
+    ret= sp_find_and_drop_routine(thd, table, type, name);
+    break;
   }
-
-  if ((ret= db_find_routine_aux(thd, type, name, table)) == SP_OK)
-    ret= sp_drop_routine_internal(thd, type, name, table);
 
   if (ret == SP_OK &&
       write_bin_log(thd, TRUE, thd->query(), thd->query_length()))
@@ -1902,37 +1970,25 @@ bool lock_db_routines(THD *thd, const char *db)
 
 
 /**
-  Drop all routines in database 'db'
-
-  @note Close the thread tables, the calling code might want to
-  delete from other system tables afterwards.
+  Drop all routines in 'db', using an opened mysql.proc table.
 */
-
-int
-sp_drop_db_routines(THD *thd, const char *db, const char *prefix)
+static int
+sp_drop_db_routines_internal(THD *thd, TABLE *table,
+                             const char *db, const char *prefix)
 {
-  TABLE *table;
-  int ret;
+  int ret= SP_OK;
   uint key_len;
-  MDL_savepoint mdl_savepoint= thd->mdl_context.mdl_savepoint();
   uchar keybuf[MAX_KEY_LENGTH];
-  DBUG_ENTER("sp_drop_db_routines");
+  DBUG_ENTER("sp_drop_db_routines_internal");
   DBUG_PRINT("enter", ("db: %s", db));
-
-  ret= SP_OPEN_TABLE_FAILED;
-  if (!(table= open_proc_table_for_update(thd)))
-    goto err;
 
   table->field[MYSQL_PROC_FIELD_DB]->store(db, strlen(db), system_charset_info);
   key_len= table->key_info->key_part[0].store_length;
   table->field[MYSQL_PROC_FIELD_DB]->get_key_image(keybuf, key_len, Field::itRAW);
 
-  ret= SP_OK;
   if (table->file->ha_index_init(0, 1))
-  {
-    ret= SP_KEY_NOT_FOUND;
-    goto err_idx_init;
-  }
+    DBUG_RETURN(SP_KEY_NOT_FOUND);
+
   if (!table->file->ha_index_read_map(table->record[0], keybuf, (key_part_map)1,
                                       HA_READ_KEY_EXACT))
   {
@@ -1973,7 +2029,31 @@ sp_drop_db_routines(THD *thd, const char *db, const char *prefix)
   }
   table->file->ha_index_end();
 
-err_idx_init:
+  DBUG_RETURN(ret);
+}
+
+
+/**
+  Drop all routines in database 'db'
+
+  @note Close the thread tables, the calling code might want to
+  delete from other system tables afterwards.
+*/
+
+int
+sp_drop_db_routines(THD *thd, const char *db, const char *prefix)
+{
+  TABLE *table;
+  int ret;
+  MDL_savepoint mdl_savepoint= thd->mdl_context.mdl_savepoint();
+  DBUG_ENTER("sp_drop_db_routines");
+  DBUG_PRINT("enter", ("db: %s", db));
+
+  if (!(table= open_proc_table_for_update(thd)))
+    DBUG_RETURN(SP_OPEN_TABLE_FAILED);
+
+  ret= sp_drop_db_routines_internal(thd, table, db, prefix);
+
   close_thread_tables(thd);
   /*
     Make sure to only release the MDL lock on mysql.proc, not other
@@ -1981,7 +2061,6 @@ err_idx_init:
   */
   thd->mdl_context.rollback_to_savepoint(mdl_savepoint);
 
-err:
   DBUG_RETURN(ret);
 }
 
