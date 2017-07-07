@@ -3129,21 +3129,11 @@ static int mysql_create_package_body_routines(THD *thd,
   bool rc= false;
   LEX *oldlex= thd->lex;
   List_iterator<LEX> it(package->m_lex_list);
-  /*
-    Set definer to root@localhost for now.
-    TODO: add the DEFINER clause into CREATE PACKAGE and
-    copy the definer from CREATE PACKAGE to all package routines.
-  */
-  LEX_USER definer;
-  bzero((char*) &definer, sizeof(definer));
-  definer.user.str= "root";
-  definer.user.length= 4;
-  definer.host.str= "localhost";
-  definer.host.length= 9;
+
   for (LEX *lex; (lex= it++); )
   {
     thd->lex= lex;
-    thd->lex->definer= &definer; //oldlex->definer;
+    thd->lex->definer= oldlex->definer;
     thd->lex->spname->make_package_routine_name(thd, oldlex->name,
                                                 thd->lex->spname->m_name);
     thd->lex->sphead->m_name= thd->lex->spname->m_name;
@@ -3164,6 +3154,8 @@ static int mysql_create_package(THD *thd, LEX *lex, stored_procedure_type type)
     my_error(ER_NO_DB_ERROR, MYF(0));
     return true;
   }
+  if (sp_process_definer(thd))
+    return true;
   LEX_CSTRING tmpdb= thd->db_lex_cstring();
   sp_name spname(&tmpdb, &lex->name, false);
   WSREP_TO_ISOLATION_BEGIN(WSREP_MYSQL_DB, NULL, NULL)

@@ -7146,7 +7146,6 @@ bool LEX::create_package_start(THD *thd,
                                DDL_options_st options)
 {
   name= name_arg;
-  definer= NULL;
   if (set_command_with_check(command, options))
     return true;
   if (!(package_body= new (thd->mem_root) Package_body(this)))

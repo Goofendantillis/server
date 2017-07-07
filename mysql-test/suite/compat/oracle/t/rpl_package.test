@@ -47,4 +47,32 @@ connection slave;
 SELECT COUNT(*) FROM mysql.proc WHERE db='test' AND name='pack';
 
 
+--echo #
+--echo # Creating a package with a different DEFINER
+--echo #
+
+connection master;
+
+DELIMITER $$;
+CREATE DEFINER=xxx@localhost PACKAGE p1 AS
+  PROCEDURE p1;
+END;
+$$
+CREATE DEFINER=xxx@localhost PACKAGE BODY p1 AS
+  PROCEDURE p1 AS
+  BEGIN
+    NULL;
+  END;
+END;
+$$
+DELIMITER ;$$
+
+SELECT definer, name, type FROM mysql.proc WHERE name LIKE 'p1%' ORDER BY definer, name, type;
+sync_slave_with_master;
+SELECT definer, name, type FROM mysql.proc WHERE name LIKE 'p1%' ORDER BY definer, name, type;
+
+connection master;
+DROP PACKAGE p1;
+sync_slave_with_master;
+
 --source include/rpl_end.inc

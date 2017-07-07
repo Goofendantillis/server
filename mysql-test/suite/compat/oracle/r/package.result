@@ -1277,3 +1277,28 @@ DROP FUNCTION f3;
 DROP PROCEDURE p3;
 DROP FUNCTION ff2;
 DROP PROCEDURE pp2;
+#
+# Creating a package with a different DEFINER
+#
+CREATE DEFINER=xxx@localhost PACKAGE p1 AS
+PROCEDURE p1;
+END;
+$$
+Warnings:
+Note	1449	The user specified as a definer ('xxx'@'localhost') does not exist
+CREATE DEFINER=xxx@localhost PACKAGE BODY p1 AS
+PROCEDURE p1 AS
+BEGIN
+NULL;
+END;
+END;
+$$
+Warnings:
+Note	1449	The user specified as a definer ('xxx'@'localhost') does not exist
+Note	1449	The user specified as a definer ('xxx'@'localhost') does not exist
+SELECT definer, name, type FROM mysql.proc WHERE name LIKE 'p1%' ORDER BY definer, name, type;
+definer	name	type
+xxx@localhost	p1	PACKAGE
+xxx@localhost	p1	PACKAGE BODY
+xxx@localhost	p1.p1	PROCEDURE
+DROP PACKAGE p1;

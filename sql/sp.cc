@@ -1379,6 +1379,7 @@ done:
 
 static bool
 show_create_package(THD *thd, String *buf,
+                    const AUTHID *definer,
                     const LEX_CSTRING &type,
                     const sp_name *spname,
                     const LEX_CSTRING &body,
@@ -1388,7 +1389,7 @@ show_create_package(THD *thd, String *buf,
     buf->append(STRING_WITH_LEN("CREATE ")) ||
     (ddl_options.or_replace() &&
      buf->append(STRING_WITH_LEN("OR REPLACE "))) ||
-    //TODO: append_definer(thd, buf, definer_user, definer_host) ||
+    append_definer(thd, buf, &definer->user, &definer->host) ||
     buf->append(type.str, type.length) ||
     buf->append(" ", 1) ||
     (ddl_options.if_not_exists() &&
@@ -1409,8 +1410,8 @@ sp_create_package(THD *thd,
 {
   bool ret= TRUE;
   TABLE *table;
-  //char definer_buf[USER_HOST_BUFF_SIZE];
-  //LEX_STRING definer;
+  char definer_buf[USER_HOST_BUFF_SIZE];
+  LEX_CSTRING definer;
   sql_mode_t saved_mode= thd->variables.sql_mode;
   MDL_key::enum_mdl_namespace mdl_type= MDL_key::PROCEDURE; // TODO
 
@@ -1514,8 +1515,8 @@ sp_create_package(THD *thd,
 
     restore_record(table, s->default_values); // Get default values for fields
 
-//    /* NOTE: all needed privilege checks have been already done. */
-//    thd->lex->definer->set_lex_string(&definer, definer_buf);
+    /* NOTE: all needed privilege checks have been already done. */
+    thd->lex->definer->set_lex_string(&definer, definer_buf);
 
     if (table->s->fields < MYSQL_PROC_FIELD_COUNT)
     {
@@ -1592,7 +1593,7 @@ sp_create_package(THD *thd,
 
     store_failed= store_failed ||
       table->field[MYSQL_PROC_FIELD_DEFINER]->
-        store(C_STRING_WITH_LEN("root@localhost"), system_charset_info);
+        store(definer.str, definer.length, system_charset_info);
 
     ((Field_timestamp *)table->field[MYSQL_PROC_FIELD_CREATED])->set_time();
     ((Field_timestamp *)table->field[MYSQL_PROC_FIELD_MODIFIED])->set_time();
@@ -1661,7 +1662,9 @@ log:
     LEX_CSTRING type_str;
     type_str.str= stored_procedure_type_to_str(type);
     type_str.length= strlen(type_str.str);
-    if (show_create_package(thd, &log_query, type_str, spname,
+    if (show_create_package(thd, &log_query,
+                            thd->lex->definer,
+                            type_str, spname,
                             sp->m_body, ddl_options))
     {
       my_error(ER_OUT_OF_RESOURCES, MYF(0));

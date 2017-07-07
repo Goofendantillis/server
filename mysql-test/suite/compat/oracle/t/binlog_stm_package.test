@@ -35,6 +35,25 @@ DROP PACKAGE BODY p1;
 DROP PACKAGE p1;
 DROP PACKAGE IF EXISTS p1;
 
+--echo #
+--echo # Creating a package with a different DEFINER
+--echo #
+
+DELIMITER $$;
+CREATE DEFINER=xxx@localhost PACKAGE p1 AS
+  PROCEDURE p1;
+END;
+$$
+CREATE DEFINER=xxx@localhost PACKAGE BODY p1 AS
+  PROCEDURE p1 AS
+  BEGIN
+    NULL;
+  END;
+END;
+$$
+DELIMITER ;$$
+DROP PACKAGE p1;
+
 
 --let $binlog_file = LAST
 source include/show_binlog_events.inc;
